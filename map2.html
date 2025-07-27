@@ -1,23 +1,40 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Walking Route – Smooth Progress Like Google Maps</title>
+  <title>Maraton Walking Route with Smooth Rotation</title>
   <style>
-    #map { height: 90vh; width: 100%; }
-    #controls { margin: 10px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
+    body { margin: 0; padding: 0; font-family: Arial, sans-serif; background: #f8f8f8; }
+    #map { height: 100vh; width: 100%; }
+
+    #controls { 
+      position: absolute; top: 10px; left: 10px; z-index: 5; 
+      background: rgba(255,255,255,0.9); padding: 10px; border-radius: 8px; 
+      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+    }
+    #controls button, input { margin: 4px 0; }
     #progressBarWrapper {
-      position: fixed; top: 8px; left: 50%; transform: translateX(-50%);
-      width: 320px; background: #eee; border-radius: 6px; padding: 6px 10px;
-      box-shadow: 0 2px 6px rgba(0,0,0,.15); font-family: sans-serif; z-index: 2;
+      position: fixed;
+      top: 20px;
+      right: 20px;
+      width: 260px;
+      background: #800000;
+      border-radius: 6px;
+      padding: 6px 10px;
+      box-shadow: 0 2px 6px rgb(255, 252, 252);
+      font-family: sans-serif;
+      z-index: 2;
+      color: white; /* White text */
+      font-weight: bold; /* Bold text */
     }
     #progressOuter {
-      width: 100%; height: 8px; background: #ccc; border-radius: 4px; overflow: hidden; margin-top: 4px;
+      width: 100%; height: 8px; background: rgb(255, 255, 255); 
+      border-radius: 4px; overflow: hidden; margin-top: 4px;
     }
     #progressInner {
       width: 0%; height: 100%; background: #00c853; transition: width .2s linear;
     }
-    .muted { color:#666; font-size: 12px; }
-    input[type=text] { width: 80%; }
+    .muted { color:#ccc; font-size: 12px; font-weight: normal; }
+    input[type=text] { width: 90%; padding: 4px; }
   </style>
 </head>
 <body>
@@ -25,7 +42,7 @@
     <button onclick="clearRoute()">Clear Route</button>
     <button onclick="savePath()">Save Path</button>
     <button onclick="loadSavedPath()">Load Saved Path</button>
-    <button onclick="generateShareLink()">Generate Shareable Link</button>
+    <button onclick="generateShareLink()">Share Link</button>
     <button id="startNavBtn" disabled onclick="startNavigation()">Start Navigation</button>
     <input type="text" id="shareLink" readonly onclick="this.select()">
   </div>
@@ -40,6 +57,7 @@
 
   <div id="map"></div>
 
+  <!-- Google Maps + Geometry + Roads API -->
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDgUtO-QtZfRHq1mARfb3U-G_FNCM_ySN8&libraries=geometry&callback=initMap" async defer></script>
 
   <script>
@@ -48,27 +66,32 @@
     let waypoints = [];
     let waypointMarkers = [];
 
-    // High-res path & helpers
-    let fullPath = [];                 // Array<LatLng> – from legs[].steps[].path
-    let cumDist = [];                  // cumulative meters at each point
-    let totalDist = 0;                 // meters
+    let fullPath = []; 
+    let cumDist = []; 
+    let totalDist = 0;
 
-    // Two polylines to emulate Google Maps coloring
-    let upcomingRoute, doneRoute;
+    let upcomingRoute, upcomingRouteBase, doneRoute, doneRouteBase;
+    let startMarker, endMarker;
 
-    // State
     let hasCenteredOnGPS = false;
     let navigationStarted = false;
-    let lastProgressIndex = 0;         // last snapped point index along fullPath
+    let lastProgressIndex = 0;
 
-    // ETA smoothing
     let lastProgressTime = null;
     let lastProgressMeters = 0;
+
+    // For smooth rotation
+    let lastUserPos = null;
+    let lastHeading = 0;
 
     function initMap() {
       map = new google.maps.Map(document.getElementById("map"), {
         center: { lat: 12.93, lng: 77.61 },
-        zoom: 15,
+        zoom: 17,
+        streetViewControl: false,
+        mapTypeControl: false,
+        tilt: 45,       // Enable tilt for 3D map rotation
+        heading: 0      // Initial heading
       });
 
       directionsService = new google.maps.DirectionsService();
@@ -76,20 +99,34 @@
         map,
         suppressMarkers: true,
         preserveViewport: true,
-        polylineOptions: { strokeOpacity: 0 } // hide default
+        polylineOptions: { strokeOpacity: 0 } 
       });
 
+      // Base polylines for "depth"
+      upcomingRouteBase = new google.maps.Polyline({
+        map,
+        strokeColor: "#0b5394",
+        strokeOpacity: 0.4,
+        strokeWeight: 12,
+      });
+      doneRouteBase = new google.maps.Polyline({
+        map,
+        strokeColor: "#777",
+        strokeOpacity: 0.4,
+        strokeWeight: 12,
+      });
+
+      // Main polylines
       upcomingRoute = new google.maps.Polyline({
         map,
-        strokeColor: "#1A73E8", // Google blue-ish
-        strokeOpacity: 0.9,
+        strokeColor: "#1A73E8",
+        strokeOpacity: 1,
         strokeWeight: 6,
       });
-
       doneRoute = new google.maps.Polyline({
         map,
-        strokeColor: "#9e9e9e", // Gray
-        strokeOpacity: 0.9,
+        strokeColor: "#9e9e9e",
+        strokeOpacity: 1,
         strokeWeight: 6,
       });
 
@@ -106,12 +143,29 @@
       loadPointsFromURL();
     }
 
-    // ---------------- Waypoints ----------------
+    // ---------- SNAP TO ROAD ----------
+    function snapToRoad(lat, lng, callback) {
+      const url = `https://roads.googleapis.com/v1/nearestRoads?points=${lat},${lng}&key=AIzaSyDgUtO-QtZfRHq1mARfb3U-G_FNCM_ySN8`;
+      fetch(url)
+        .then(res => res.json())
+        .then(data => {
+          if (data.snappedPoints && data.snappedPoints.length > 0) {
+            const snapped = data.snappedPoints[0].location;
+            callback(new google.maps.LatLng(snapped.latitude, snapped.longitude));
+          } else {
+            callback(new google.maps.LatLng(lat, lng));
+          }
+        })
+        .catch(() => callback(new google.maps.LatLng(lat, lng)));
+    }
+
     function addWaypoint(latlng) {
-      waypoints.push(latlng);
-      const marker = createMarker(latlng, waypoints.length - 1);
-      waypointMarkers.push(marker);
-      updateRoute();
+      snapToRoad(latlng.lat(), latlng.lng(), snappedPoint => {
+        waypoints.push(snappedPoint);
+        const marker = createMarker(snappedPoint, waypoints.length - 1);
+        waypointMarkers.push(marker);
+        updateRoute();
+      });
     }
 
     function createMarker(latlng, index) {
@@ -150,10 +204,9 @@
       waypointMarkers.forEach((m, i) => m.setLabel(`${i + 1}`));
     }
 
-    // ---------------- Route ----------------
+    // ---------- ROUTE ----------
     function updateRoute() {
       if (waypoints.length < 2) {
-        directionsRenderer.setDirections({ routes: [] });
         resetPathState();
         resetNavigation();
         return;
@@ -181,17 +234,9 @@
         }
 
         directionsRenderer.setDirections(result);
+        fullPath = result.routes[0].overview_path;
 
-        // Build high-resolution path from steps
-        fullPath = [];
-        const route = result.routes[0];
-        route.legs.forEach(leg => {
-          leg.steps.forEach(step => {
-            step.path.forEach(pt => fullPath.push(pt));
-          });
-        });
-
-        // Precompute cumulative distances
+        // Compute distances
         cumDist = [0];
         for (let i = 1; i < fullPath.length; i++) {
           const d = google.maps.geometry.spherical.computeDistanceBetween(fullPath[i - 1], fullPath[i]);
@@ -199,11 +244,13 @@
         }
         totalDist = cumDist[cumDist.length - 1];
 
-        // Reset polylines
         doneRoute.setPath([]);
+        doneRouteBase.setPath([]);
         upcomingRoute.setPath(fullPath);
+        upcomingRouteBase.setPath(fullPath);
 
-        // Reset navigation progress
+        addStartEndMarkers();
+
         lastProgressIndex = 0;
         lastProgressTime = null;
         lastProgressMeters = 0;
@@ -213,15 +260,51 @@
       });
     }
 
+    function addStartEndMarkers() {
+      if (startMarker) startMarker.setMap(null);
+      if (endMarker) endMarker.setMap(null);
+
+      if (fullPath.length > 0) {
+        startMarker = new google.maps.Marker({
+          position: fullPath[0],
+          map,
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 8,
+            fillColor: "#1A73E8",
+            fillOpacity: 1,
+            strokeColor: "#fff",
+            strokeWeight: 3
+          }
+        });
+        endMarker = new google.maps.Marker({
+          position: fullPath[fullPath.length - 1],
+          map,
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 8,
+            fillColor: "#1A73E8",
+            fillOpacity: 1,
+            strokeColor: "#fff",
+            strokeWeight: 3
+          }
+        });
+      }
+    }
+
     function resetPathState() {
       fullPath = [];
       cumDist = [];
       totalDist = 0;
       doneRoute.setPath([]);
+      doneRouteBase.setPath([]);
       upcomingRoute.setPath([]);
+      upcomingRouteBase.setPath([]);
+      if (startMarker) startMarker.setMap(null);
+      if (endMarker) endMarker.setMap(null);
     }
 
-    // ---------------- GPS ----------------
+    // ---------- GPS ----------
     function onPositionUpdate(pos) {
       const currentPos = new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
 
@@ -247,7 +330,13 @@
         map.setCenter(currentPos);
         map.setZoom(17);
         hasCenteredOnGPS = true;
+      } else {
+        // Keep GPS marker centered on map as user moves
+        map.setCenter(currentPos);
       }
+
+      // Update map rotation smoothly
+      updateMapHeading(currentPos);
 
       if (!navigationStarted) {
         checkStartButton(currentPos);
@@ -274,114 +363,117 @@
       lastProgressTime = Date.now();
       lastProgressMeters = 0;
       doneRoute.setPath([]);
+      doneRouteBase.setPath([]);
       upcomingRoute.setPath(fullPath);
+      upcomingRouteBase.setPath(fullPath);
       document.getElementById("startNavBtn").disabled = true;
       showProgressBar();
       updateProgressUI(0, totalDist);
     }
 
-    // ---------------- REAL smooth progress ----------------
+    // ---------- SMOOTH ROTATION ----------
+
+    function updateMapHeading(currentPos) {
+      if (!lastUserPos) {
+        lastUserPos = currentPos;
+        return;
+      }
+
+      // Calculate bearing between last position and current position
+      const heading = google.maps.geometry.spherical.computeHeading(lastUserPos, currentPos);
+      if (heading !== undefined && !isNaN(heading)) {
+        // Smoothly interpolate between lastHeading and new heading
+        lastHeading = smoothHeadingTransition(lastHeading, heading, 0.1); // 0.1 = smoothing factor
+        map.setHeading(lastHeading);
+      }
+      lastUserPos = currentPos;
+    }
+
+    function smoothHeadingTransition(from, to, factor) {
+      let diff = to - from;
+      if (diff > 180) diff -= 360;
+      if (diff < -180) diff += 360;
+      return (from + diff * factor + 360) % 360;
+    }
+
+    // ---------- PROGRESS ----------
+
     function updateSmoothProgress(currentPos) {
       if (!fullPath.length) return;
 
-      // Find closest segment ahead of lastProgressIndex (linear scan from there)
-      const searchStart = Math.max(lastProgressIndex - 5, 0); // tiny look-back for GPS jitter
-      let best = {
-        dist: Infinity,
-        segIndex: -1,
-        projPoint: null,
-        projRatio: 0, // t in [0,1] along the segment
-        cumMetersAtProj: 0
-      };
+      const searchStart = Math.max(lastProgressIndex - 5, 0);
+      let best = { dist: Infinity, segIndex: -1, projPoint: null, projRatio: 0, cumMetersAtProj: 0 };
 
       for (let i = searchStart; i < fullPath.length - 1; i++) {
         const a = fullPath[i];
         const b = fullPath[i + 1];
-
-        // Projection of currentPos onto segment ab
         const proj = projectPointOnSegment(currentPos, a, b);
         if (!proj) continue;
-
         const d = google.maps.geometry.spherical.computeDistanceBetween(currentPos, proj.point);
         if (d < best.dist) {
           best.dist = d;
           best.segIndex = i;
           best.projPoint = proj.point;
-          best.projRatio = proj.t;
-
-          // distance up to point 'a'
           const distToA = cumDist[i];
-          // plus segment portion
           const segLen = google.maps.geometry.spherical.computeDistanceBetween(a, b);
           best.cumMetersAtProj = distToA + segLen * proj.t;
         }
       }
-
-      // If nothing decent found, stop
       if (best.segIndex === -1) return;
 
-      // Only move forward (avoid jumping back on jitter)
       const metersAdvanced = best.cumMetersAtProj - (cumDist[lastProgressIndex] || 0);
-      if (metersAdvanced < -5) return; // ignore backwards
+      if (metersAdvanced < -5) return;
 
-      // Build paths
       const donePts = [];
       if (best.segIndex >= 0) {
-        for (let i = 0; i <= best.segIndex; i++) {
-          donePts.push(fullPath[i]);
-        }
+        for (let i = 0; i <= best.segIndex; i++) donePts.push(fullPath[i]);
         donePts.push(best.projPoint);
       }
 
       const futurePts = [best.projPoint];
-      for (let i = best.segIndex + 1; i < fullPath.length; i++) {
-        futurePts.push(fullPath[i]);
-      }
+      for (let i = best.segIndex + 1; i < fullPath.length; i++) futurePts.push(fullPath[i]);
 
       doneRoute.setPath(donePts);
+      doneRouteBase.setPath(donePts);
       upcomingRoute.setPath(futurePts);
+      upcomingRouteBase.setPath(futurePts);
 
-      // Update progress index approx
       lastProgressIndex = Math.max(lastProgressIndex, best.segIndex);
 
-      // UI: percent, remaining, ETA
       const doneMeters = best.cumMetersAtProj;
       const remain = Math.max(0, totalDist - doneMeters);
       const pct = totalDist > 0 ? (doneMeters / totalDist) * 100 : 0;
       updateProgressUI(pct, remain);
+
+      // Check if reached destination (within 15 meters)
+      if (remain <= 15) {
+        navigationStarted = false;
+        alert("🎉 You have reached your destination!");
+        hideProgressBar();
+      }
     }
 
-    // Project point P on segment AB, return {point,t} where t in [0,1]
     function projectPointOnSegment(p, a, b) {
-      // Convert to 2D (x,y) using a simple equirectangular approximation for small distances
       const ax = a.lng(), ay = a.lat();
       const bx = b.lng(), by = b.lat();
       const px = p.lng(), py = p.lat();
-
       const abx = bx - ax;
       const aby = by - ay;
       const apx = px - ax;
       const apy = py - ay;
-
       const ab2 = abx * abx + aby * aby;
       if (ab2 === 0) return null;
-
-      let t = (apx * abx + apy * aby) * 1.0 / ab2;
+      let t = (apx * abx + apy * aby) / ab2;
       t = Math.max(0, Math.min(1, t));
-
       const qx = ax + abx * t;
       const qy = ay + aby * t;
-
       return { point: new google.maps.LatLng(qy, qx), t };
     }
 
-    // ---------------- Progress UI ----------------
-    function showProgressBar() {
-      document.getElementById("progressBarWrapper").style.display = "block";
-    }
-    function hideProgressBar() {
-      document.getElementById("progressBarWrapper").style.display = "none";
-    }
+    // ---------- UI ----------
+
+    function showProgressBar() { document.getElementById("progressBarWrapper").style.display = "block"; }
+    function hideProgressBar() { document.getElementById("progressBarWrapper").style.display = "none"; }
 
     function updateProgressUI(percent, remainingMeters) {
       const pctRounded = Math.min(100, Math.max(0, percent)).toFixed(1);
@@ -392,18 +484,17 @@
       progInner.style.width = pctRounded + "%";
       progText.textContent = `${pctRounded}% • ${formatDistance(remainingMeters)} left`;
 
-      // ETA (simple): average speed from first tick
       if (lastProgressTime == null) {
         lastProgressTime = Date.now();
         lastProgressMeters = totalDist - remainingMeters;
         etaText.textContent = "";
       } else {
         const now = Date.now();
-        const dt = (now - lastProgressTime) / 1000; // sec
+        const dt = (now - lastProgressTime) / 1000;
         const dMeters = (totalDist - remainingMeters) - lastProgressMeters;
         if (dMeters > 1 && dt > 1) {
-          const speed = dMeters / dt; // m/s
-          if (speed > 0.3) { // walking above ~1 km/h
+          const speed = dMeters / dt;
+          if (speed > 0.3) {
             const secLeft = remainingMeters / speed;
             etaText.textContent = `ETA: ${formatDuration(secLeft)}`;
           }
@@ -413,85 +504,78 @@
       }
     }
 
-    function formatDistance(m) {
-      if (m >= 1000) return (m / 1000).toFixed(2) + " km";
-      return Math.round(m) + " m";
-    }
-
+    function formatDistance(m) { return m >= 1000 ? (m / 1000).toFixed(2) + " km" : Math.round(m) + " m"; }
     function formatDuration(sec) {
-      const m = Math.floor(sec / 60);
-      const s = Math.floor(sec % 60);
-      if (m >= 60) {
-        const h = Math.floor(m / 60);
-        const mm = m % 60;
-        return `${h}h ${mm}m`;
-      }
-      return `${m}m ${s}s`;
+      if (sec < 60) return `${Math.round(sec)} sec`;
+      else if (sec < 3600) return `${Math.floor(sec / 60)} min`;
+      else return `${Math.floor(sec / 3600)} hr ${Math.floor((sec % 3600) / 60)} min`;
     }
 
-    function resetNavigation() {
-      navigationStarted = false;
-      document.getElementById("startNavBtn").disabled = true;
-      hideProgressBar();
-      lastProgressIndex = 0;
-      lastProgressTime = null;
-      lastProgressMeters = 0;
-    }
-
-    // ---------------- UI helpers ----------------
-    function clearRoute() {
-      if (!confirm("Clear route?")) return;
-      waypoints = [];
-      waypointMarkers.forEach(m => m.setMap(null));
-      waypointMarkers = [];
-      directionsRenderer.setDirections({ routes: [] });
-      resetPathState();
-      resetNavigation();
-      document.getElementById("shareLink").value = "";
-      localStorage.removeItem("savedPath");
-    }
-
+    // ---------- SAVE / LOAD / SHARE ----------
     function savePath() {
-      if (!waypoints.length) return alert("No path to save!");
-      const points = waypoints.map(p => `${p.lat()},${p.lng()}`).join(";");
-      localStorage.setItem("savedPath", points);
+      if (waypoints.length === 0) {
+        alert("Add some waypoints first!");
+        return;
+      }
+      localStorage.setItem("savedPath", JSON.stringify(waypoints.map(p => ({ lat: p.lat(), lng: p.lng() }))));
       alert("Path saved!");
     }
 
     function loadSavedPath() {
       const saved = localStorage.getItem("savedPath");
-      if (!saved) return alert("No saved path found!");
-      loadPoints(saved);
+      if (!saved) {
+        alert("No saved path found.");
+        return;
+      }
+      const arr = JSON.parse(saved);
+      clearRoute();
+      arr.forEach(p => addWaypoint(new google.maps.LatLng(p.lat, p.lng)));
+      alert("Path loaded.");
     }
 
-    function generateShareLink() {
-      if (waypoints.length < 2) return alert("Add at least two points.");
-      const points = waypoints.map(p => `${p.lat()},${p.lng()}`).join(";");
-      const url = `${window.location.href.split("?")[0]}?points=${encodeURIComponent(points)}`;
-      document.getElementById("shareLink").value = url;
-      if (navigator.clipboard) navigator.clipboard.writeText(url);
-      alert("Link copied!");
-    }
-
-    function loadPointsFromURL() {
-      const params = new URLSearchParams(window.location.search);
-      if (!params.has("points")) return;
-      loadPoints(params.get("points"));
-    }
-
-    function loadPoints(rawPoints) {
-      const arr = rawPoints.split(";");
+    function clearRoute() {
       waypoints = [];
       waypointMarkers.forEach(m => m.setMap(null));
       waypointMarkers = [];
-      arr.forEach((p, idx) => {
-        const [lat, lng] = p.split(",").map(Number);
-        const latLng = new google.maps.LatLng(lat, lng);
-        waypoints.push(latLng);
-        waypointMarkers.push(createMarker(latLng, idx));
-      });
-      relabelMarkers();
-      updateRoute();
+      resetPathState();
+      resetNavigation();
+      document.getElementById("startNavBtn").disabled = true;
+      hideProgressBar();
+      document.getElementById("shareLink").value = "";
+    }
+
+    function resetNavigation() {
+      navigationStarted = false;
+      lastProgressIndex = 0;
+      lastProgressTime = null;
+      lastProgressMeters = 0;
+      document.getElementById("startNavBtn").disabled = waypoints.length === 0;
+    }
+
+    function generateShareLink() {
+      if (waypoints.length === 0) {
+        alert("Add some waypoints to share.");
+        return;
+      }
+      const base = window.location.href.split("?")[0];
+      const pointsStr = waypoints.map(p => `${p.lat()},${p.lng()}`).join(";");
+      const link = `${base}?points=${encodeURIComponent(pointsStr)}`;
+      const input = document.getElementById("shareLink");
+      input.value = link;
+      input.select();
+      alert("Share link generated and copied.");
+    }
+
+    function loadPointsFromURL() {
+      const urlParams = new URLSearchParams(window.location.search);
+      const points = urlParams.get("points");
+      if (points) {
+        const arr = points.split(";").map(s => {
+          const [lat, lng] = s.split(",");
+          return new google.maps.LatLng(parseFloat(lat), parseFloat(lng));
+        });
+        arr.forEach(p => addWaypoint(p));
+      }
     }
   </script>
 </body>
