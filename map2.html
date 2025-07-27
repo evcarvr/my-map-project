@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Walking Route with Save & Share</title>
+  <style>
+    #map { height: 90vh; width: 100%; }
+    #controls { margin: 10px; }
+    button {
+      margin: 5px;
+      padding: 8px 12px;
+      font-size: 14px;
+    }
+    input[type=text] { width: 80%; }
+  </style>
+</head>
+<body>
+  <div id="controls">
+    <button onclick="clearRoute()">Clear Route</button>
+    <button onclick="savePath()">Save Path</button>
+    <button onclick="loadSavedPath()">Load Saved Path</button>
+    <button onclick="generateShareLink()">Generate Shareable Link</button>
+    <br>
+    <input type="text" id="shareLink" readonly onclick="this.select()">
+  </div>
+  <div id="map"></div>
+
+  <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDgUtO-QtZfRHq1mARfb3U-G_FNCM_ySN8&libraries=geometry&callback=initMap" async defer></script>
+
+  <script>
+    let map, directionsService, directionsRenderer, gpsMarker;
+    let waypoints = [];
+    let waypointMarkers = [];
+    let routePath = [];
+    let completedPoints = [];
+    let completedPath, offRoutePath;
+    let hasCenteredOnGPS = false;
+
+    function initMap() {
+      map = new google.maps.Map(document.getElementById("map"), {
+        center: { lat: 12.93, lng: 77.61 },
+        zoom: 15,
+      });
+
+      directionsService = new google.maps.DirectionsService();
+      directionsRenderer = new google.maps.DirectionsRenderer({
+        map,
+        suppressMarkers: true,
+        preserveViewport: true,
+        polylineOptions: {
+          strokeColor: "#0000FF", // Original route (blue)
+          strokeOpacity: 0.6,
+          strokeWeight: 4
+        }
+      });
+
+      completedPath = new google.maps.Polyline({
+        path: [],
+        map,
+        strokeColor: "#00FF00",  // Green for completed
+        strokeOpacity: 0.9,
+        strokeWeight: 5,
+      });
+
+      offRoutePath = new google.maps.Polyline({
+        path: [],
+        map,
+        strokeColor: "#FF0000",  // Red for off-route
+        strokeOpacity: 0.9,
+        strokeWeight: 4,
+      });
+
+      map.addListener("click", e => addWaypoint(e.latLng));
+
+      if (navigator.geolocation) {
+        navigator.geolocation.watchPosition(
+          onPositionUpdate,
+          error => console.error("Geolocation error", error),
+          { enableHighAccuracy: true, maximumAge: 0, timeout: 10000 }
+        );
+      }
+
+      loadPointsFromURL();
+    }
+
+    // -------- Waypoint / Marker helpers --------
+    function addWaypoint(latlng) {
+      waypoints.push(latlng);
+      const marker = createMarker(latlng, waypoints.length - 1);
+      waypointMarkers.push(marker);
+      updateRoute();
+    }
+
+    function createMarker(latlng, index) {
+      const marker = new google.maps.Marker({
+        position: latlng,
+        map,
+        label: `${index + 1}`,
+        draggable: true
+      });
+
+      marker.addListener("click", () => {
+        const idx = waypointMarkers.indexOf(marker);
+        if (idx !== -1) deleteWaypoint(idx);
+      });
+
+      marker.addListener("dragend", () => {
+        const idx = waypointMarkers.indexOf(marker);
+        if (idx !== -1) {
+          waypoints[idx] = marker.getPosition();
+          updateRoute();
+        }
+      });
+
+      return marker;
+    }
+
+    function deleteWaypoint(index) {
+      waypointMarkers[index].setMap(null);
+      waypointMarkers.splice(index, 1);
+      waypoints.splice(index, 1);
+      relabelMarkers();
+      updateRoute();
+    }
+
+    function relabelMarkers() {
+      waypointMarkers.forEach((m, i) => m.setLabel(`${i + 1}`));
+    }
+
+    // -------- Routing --------
+    function updateRoute() {
+      if (waypoints.length < 2) {
+        directionsRenderer.setDirections({ routes: [] });
+        routePath = [];
+        completedPoints = [];
+        completedPath.setPath([]);
+        offRoutePath.setPath([]);
+        return;
+      }
+      calculateRoute();
+    }
+
+    function calculateRoute() {
+      const origin = waypoints[0];
+      const destination = waypoints[waypoints.length - 1];
+      const midpoints = waypoints.slice(1, -1).map(loc => ({ location: loc, stopover: true }));
+
+      const request = {
+        origin,
+        destination,
+        waypoints: midpoints,
+        travelMode: google.maps.TravelMode.WALKING,
+      };
+
+      directionsService.route(request, (result, status) => {
+        if (status === "OK") {
+          directionsRenderer.setDirections(result);
+          extractRoutePath(result.routes[0].overview_path);
+        } else {
+          alert("Directions request failed due to " + status);
+        }
+      });
+    }
+
+    function extractRoutePath(pathArray) {
+      routePath = pathArray.map(latlng => latlng.toJSON());
+      completedPoints = [];
+      completedPath.setPath([]);
+      offRoutePath.setPath([]);
+    }
+
+    // -------- GPS tracking --------
+    function onPositionUpdate(pos) {
+      const latlng = new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
+
+      if (!gpsMarker) {
+        gpsMarker = new google.maps.Marker({
+          position: latlng,
+          map,
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 6,
+            fillColor: "#0000FF",
+            fillOpacity: 1,
+            strokeColor: "#fff",
+            strokeWeight: 2,
+          }
+        });
+      } else {
+        gpsMarker.setPosition(latlng);
+      }
+
+      if (!hasCenteredOnGPS) {
+        map.setCenter(latlng);
+        map.setZoom(17);
+        hasCenteredOnGPS = true;
+      }
+
+      checkRouteStatus(latlng);
+    }
+
+    // -------- Route Check (Green/Red) --------
+    function checkRouteStatus(currentPos) {
+      if (!routePath.length) return;
+
+      let onRoute = false;
+
+      // Check proximity to route
+      for (let i = completedPoints.length; i < routePath.length; i++) {
+        const pt = routePath[i];
+        const dist = google.maps.geometry.spherical.computeDistanceBetween(
+          currentPos,
+          new google.maps.LatLng(pt)
+        );
+
+        if (dist < 30) {
+          onRoute = true;
+          completedPoints.push(pt);
+          completedPath.setPath(completedPoints);
+        } else if (onRoute) {
+          break;
+        }
+      }
+
+      if (!onRoute) {
+        // Add current GPS point to off-route red path
+        const redPath = offRoutePath.getPath();
+        redPath.push(currentPos);
+      }
+    }
+
+    // -------- UI actions --------
+    function clearRoute() {
+      waypoints = [];
+      routePath = [];
+      completedPoints = [];
+      directionsRenderer.setDirections({ routes: [] });
+      completedPath.setPath([]);
+      offRoutePath.setPath([]);
+      document.getElementById("shareLink").value = "";
+      waypointMarkers.forEach(marker => marker.setMap(null));
+      waypointMarkers = [];
+      localStorage.removeItem("savedPath");
+    }
+
+    function savePath() {
+      if (waypoints.length === 0) {
+        alert("No path to save!");
+        return;
+      }
+      const pointStr = waypoints.map(p => `${p.lat()},${p.lng()}`).join(";");
+      localStorage.setItem("savedPath", pointStr);
+      alert("Path saved!");
+    }
+
+    function loadSavedPath() {
+      const saved = localStorage.getItem("savedPath");
+      if (!saved) {
+        alert("No saved path found!");
+        return;
+      }
+      loadPoints(saved);
+    }
+
+    function generateShareLink() {
+      if (waypoints.length < 2) {
+        alert("Add at least two points to generate route.");
+        return;
+      }
+      const pointStr = waypoints.map(p => `${p.lat()},${p.lng()}`).join(";");
+      const baseUrl = window.location.href.split("?")[0];
+      const fullUrl = `${baseUrl}?points=${encodeURIComponent(pointStr)}`;
+      document.getElementById("shareLink").value = fullUrl;
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(fullUrl).then(() => {
+          alert("Link copied to clipboard!");
+        });
+      }
+    }
+
+    function loadPointsFromURL() {
+      const urlParams = new URLSearchParams(window.location.search);
+      if (!urlParams.has("points")) return;
+      const rawPoints = urlParams.get("points");
+      loadPoints(rawPoints);
+    }
+
+    function loadPoints(rawPoints) {
+      const pointArray = rawPoints.split(";");
+      waypoints = [];
+      waypointMarkers.forEach(m => m.setMap(null));
+      waypointMarkers = [];
+      pointArray.forEach((p, idx) => {
+        const [lat, lng] = p.split(",").map(Number);
+        const latLng = new google.maps.LatLng(lat, lng);
+        waypoints.push(latLng);
+        const marker = createMarker(latLng, idx);
+        waypointMarkers.push(marker);
+      });
+      relabelMarkers();
+      updateRoute();
+    }
+  </script>
+</body>
+</html>
