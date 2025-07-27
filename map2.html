@@ -36,7 +36,7 @@
     let hasCenteredOnGPS = false;
 
     let navigationStarted = false;
-    let currentNavIndex = 0;  // Next waypoint index to reach
+    let progressIndex = 0; // Tracks user's progress along route
 
     function initMap() {
       map = new google.maps.Map(document.getElementById("map"), {
@@ -219,45 +219,39 @@
         return;
       }
       navigationStarted = true;
-      currentNavIndex = 1;  // Target second waypoint initially
+      progressIndex = 0;  // Start from beginning
       const startBtn = document.getElementById("startNavBtn");
       startBtn.disabled = true;
       startBtn.textContent = "Navigation Started";
       completedPath.setPath([]);  // Clear any previous highlights
     }
 
-    // Update green path segment by segment as user reaches each waypoint
+    // Update green path dynamically
     function updateNavigationProgress(currentPos) {
-      if (currentNavIndex >= waypoints.length) {
+      if (!routePath.length) return;
+
+      // Find the closest route point ahead of progressIndex
+      for (let i = progressIndex; i < routePath.length; i++) {
+        const pt = new google.maps.LatLng(routePath[i]);
+        const dist = google.maps.geometry.spherical.computeDistanceBetween(currentPos, pt);
+
+        if (dist < 20) {  // Within 20 meters of this route point
+          progressIndex = i;
+          completedPath.setPath(routePath.slice(0, progressIndex + 1));
+          break;
+        }
+      }
+
+      // Check if we reached destination
+      if (progressIndex >= routePath.length - 1) {
         alert("Navigation complete!");
         resetNavigationState();
-        return;
       }
-
-      const target = waypoints[currentNavIndex];
-      const dist = google.maps.geometry.spherical.computeDistanceBetween(currentPos, target);
-
-      if (dist < 30) {
-        highlightSegment(currentNavIndex - 1, currentNavIndex);
-        currentNavIndex++;
-      }
-    }
-
-    function highlightSegment(fromIndex, toIndex) {
-      if (fromIndex < 0 || toIndex >= waypoints.length) return;
-
-      let path = completedPath.getPath();
-
-      // Add segment points to the green path
-      path.push(waypoints[fromIndex]);
-      path.push(waypoints[toIndex]);
-
-      completedPath.setPath(path);
     }
 
     function resetNavigationState() {
       navigationStarted = false;
-      currentNavIndex = 0;
+      progressIndex = 0;
       const startBtn = document.getElementById("startNavBtn");
       startBtn.disabled = true;
       startBtn.textContent = "Start Navigation";
