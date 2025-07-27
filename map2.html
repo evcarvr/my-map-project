@@ -1,73 +1,40 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Marathon Walking Route with Rotation & Alerts</title>
+  <title>Walking Route – Smooth Progress Like Google Maps</title>
   <style>
-    body { margin: 0; padding: 0; font-family: Arial, sans-serif; background: #f8f8f8; }
-    #map { height: 100vh; width: 100%; }
-    #controls { 
-      position: absolute; top: 10px; left: 10px; z-index: 5; 
-      background: rgba(255,255,255,0.9); padding: 10px; border-radius: 8px; 
-      box-shadow: 0 2px 6px rgba(0,0,0,0.3);
-      width: 160px;
-    }
-    #controls button, input { margin: 6px 0; width: 100%; font-weight: bold; }
+    #map { height: 90vh; width: 100%; }
+    #controls { margin: 10px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
     #progressBarWrapper {
       position: fixed;
       top: 20px;
       right: 20px;
-      width: 280px;
-      background: #800000;
+      width: 260px;
+      background: rgba(0, 0, 0, 0.7);
       border-radius: 6px;
-      padding: 8px 12px;
-      box-shadow: 0 2px 6px rgb(255, 252, 252);
+      padding: 6px 10px;
+      box-shadow: 0 2px 6px rgba(0,0,0,.15);
       font-family: sans-serif;
-      z-index: 10;
+      z-index: 2;
       color: white;
       font-weight: bold;
-      user-select: none;
     }
     #progressOuter {
-      width: 100%; height: 10px; background: rgb(255, 255, 255); 
-      border-radius: 5px; overflow: hidden; margin-top: 6px;
+      width: 100%;
+      height: 8px;
+      background: #444;
+      border-radius: 4px;
+      overflow: hidden;
+      margin-top: 4px;
     }
     #progressInner {
-      width: 0%; height: 100%; background: #00c853; transition: width .2s linear;
+      width: 0%;
+      height: 100%;
+      background: #00c853;
+      transition: width .2s linear;
     }
-    .muted { color:#ccc; font-size: 12px; font-weight: normal; }
-
-    /* Popup styles */
-    #popup {
-      position: fixed;
-      top: 50%; left: 50%;
-      transform: translate(-50%, -50%);
-      background: white;
-      padding: 20px 28px;
-      border-radius: 10px;
-      box-shadow: 0 5px 15px rgba(0,0,0,0.3);
-      z-index: 20;
-      display: none;
-      font-weight: bold;
-      font-size: 18px;
-      text-align: center;
-      max-width: 90%;
-      user-select: none;
-    }
-    #popup button {
-      margin-top: 18px;
-      padding: 8px 18px;
-      font-size: 16px;
-      cursor: pointer;
-      font-weight: bold;
-      background-color: #1A73E8;
-      color: white;
-      border: none;
-      border-radius: 5px;
-      transition: background-color 0.3s;
-    }
-    #popup button:hover {
-      background-color: #0b5394;
-    }
+    .muted { color: #ddd; font-size: 12px; font-weight: bold; }
+    input[type=text] { width: 80%; }
   </style>
 </head>
 <body>
@@ -75,9 +42,9 @@
     <button onclick="clearRoute()">Clear Route</button>
     <button onclick="savePath()">Save Path</button>
     <button onclick="loadSavedPath()">Load Saved Path</button>
-    <button onclick="generateShareLink()">Generate Share Link</button>
+    <button onclick="generateShareLink()">Generate Shareable Link</button>
     <button id="startNavBtn" disabled onclick="startNavigation()">Start Navigation</button>
-    <input type="text" id="shareLink" readonly onclick="this.select()" placeholder="Share link will appear here">
+    <input type="text" id="shareLink" readonly onclick="this.select()">
   </div>
 
   <div id="progressBarWrapper" style="display:none">
@@ -88,56 +55,35 @@
     <div class="muted" id="etaText"></div>
   </div>
 
-  <div id="popup">
-    <div id="popupMessage"></div>
-    <button onclick="closePopup()">Close</button>
-  </div>
-
   <div id="map"></div>
 
-  <!-- Google Maps + Geometry + Roads API -->
   <script src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDgUtO-QtZfRHq1mARfb3U-G_FNCM_ySN8&libraries=geometry&callback=initMap" async defer></script>
 
   <script>
-    let map, directionsService, directionsRenderer;
+    let map, directionsService, directionsRenderer, gpsMarker;
+
     let waypoints = [];
     let waypointMarkers = [];
+
     let fullPath = [];
     let cumDist = [];
     let totalDist = 0;
-    let upcomingRoute, upcomingRouteBase, doneRoute, doneRouteBase;
-    let startMarker, endMarker;
 
-    let gpsMarker = null;
+    // Enhanced route polylines
+    let upcomingRouteBase, upcomingRoute, doneRouteBase, doneRoute;
+    let startCircle, endCircle;
+
+    let hasCenteredOnGPS = false;
     let navigationStarted = false;
     let lastProgressIndex = 0;
+
     let lastProgressTime = null;
     let lastProgressMeters = 0;
-
-    let wrongPathTimer = null;
-    let wrongPathPopupShown = false;
-
-    // Rotating arrow icon for user marker
-    let arrowIcon = {
-      path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW,
-      scale: 7,
-      rotation: 0,
-      fillColor: "#1A73E8",
-      fillOpacity: 1,
-      strokeWeight: 1,
-      strokeColor: "#ffffff"
-    };
 
     function initMap() {
       map = new google.maps.Map(document.getElementById("map"), {
         center: { lat: 12.93, lng: 77.61 },
-        zoom: 17,
-        tilt: 45,
-        heading: 0,
-        streetViewControl: false,
-        mapTypeControl: false,
-        gestureHandling: "greedy",
-        rotateControl: true,
+        zoom: 15,
       });
 
       directionsService = new google.maps.DirectionsService();
@@ -148,17 +94,13 @@
         polylineOptions: { strokeOpacity: 0 }
       });
 
+      // Create enhanced polylines for depth
       upcomingRouteBase = new google.maps.Polyline({
         map,
-        strokeColor: "#0b5394",
-        strokeOpacity: 0.4,
-        strokeWeight: 12,
-      });
-      doneRouteBase = new google.maps.Polyline({
-        map,
-        strokeColor: "#777",
-        strokeOpacity: 0.4,
-        strokeWeight: 12,
+        strokeColor: "#ffffff",
+        strokeOpacity: 1,
+        strokeWeight: 10,
+        zIndex: 1
       });
 
       upcomingRoute = new google.maps.Polyline({
@@ -166,12 +108,23 @@
         strokeColor: "#1A73E8",
         strokeOpacity: 1,
         strokeWeight: 6,
+        zIndex: 2
       });
+
+      doneRouteBase = new google.maps.Polyline({
+        map,
+        strokeColor: "#ffffff",
+        strokeOpacity: 1,
+        strokeWeight: 10,
+        zIndex: 1
+      });
+
       doneRoute = new google.maps.Polyline({
         map,
         strokeColor: "#9e9e9e",
         strokeOpacity: 1,
         strokeWeight: 6,
+        zIndex: 2
       });
 
       map.addListener("click", e => addWaypoint(e.latLng));
@@ -187,29 +140,12 @@
       loadPointsFromURL();
     }
 
-    // Snap user clicks to nearest road using Roads API
-    function snapToRoad(lat, lng, callback) {
-      const url = `https://roads.googleapis.com/v1/nearestRoads?points=${lat},${lng}&key=AIzaSyDgUtO-QtZfRHq1mARfb3U-G_FNCM_ySN8`;
-      fetch(url)
-        .then(res => res.json())
-        .then(data => {
-          if (data.snappedPoints && data.snappedPoints.length > 0) {
-            const snapped = data.snappedPoints[0].location;
-            callback(new google.maps.LatLng(snapped.latitude, snapped.longitude));
-          } else {
-            callback(new google.maps.LatLng(lat, lng));
-          }
-        })
-        .catch(() => callback(new google.maps.LatLng(lat, lng)));
-    }
-
+    // ---------------- Waypoints ----------------
     function addWaypoint(latlng) {
-      snapToRoad(latlng.lat(), latlng.lng(), snappedPoint => {
-        waypoints.push(snappedPoint);
-        const marker = createMarker(snappedPoint, waypoints.length - 1);
-        waypointMarkers.push(marker);
-        updateRoute();
-      });
+      waypoints.push(latlng);
+      const marker = createMarker(latlng, waypoints.length - 1);
+      waypointMarkers.push(marker);
+      updateRoute();
     }
 
     function createMarker(latlng, index) {
@@ -248,8 +184,10 @@
       waypointMarkers.forEach((m, i) => m.setLabel(`${i + 1}`));
     }
 
+    // ---------------- Route ----------------
     function updateRoute() {
       if (waypoints.length < 2) {
+        directionsRenderer.setDirections({ routes: [] });
         resetPathState();
         resetNavigation();
         return;
@@ -277,7 +215,15 @@
         }
 
         directionsRenderer.setDirections(result);
-        fullPath = result.routes[0].overview_path;
+
+        // Build high-resolution path
+        fullPath = [];
+        const route = result.routes[0];
+        route.legs.forEach(leg => {
+          leg.steps.forEach(step => {
+            step.path.forEach(pt => fullPath.push(pt));
+          });
+        });
 
         cumDist = [0];
         for (let i = 1; i < fullPath.length; i++) {
@@ -286,12 +232,41 @@
         }
         totalDist = cumDist[cumDist.length - 1];
 
+        // Reset polylines
         doneRoute.setPath([]);
         doneRouteBase.setPath([]);
         upcomingRoute.setPath(fullPath);
         upcomingRouteBase.setPath(fullPath);
 
-        addStartEndMarkers();
+        // Start & End markers
+        if (startCircle) startCircle.setMap(null);
+        if (endCircle) endCircle.setMap(null);
+
+        startCircle = new google.maps.Marker({
+          position: fullPath[0],
+          map,
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 8,
+            fillColor: "#4CAF50",
+            fillOpacity: 1,
+            strokeColor: "#ffffff",
+            strokeWeight: 2
+          }
+        });
+
+        endCircle = new google.maps.Marker({
+          position: fullPath[fullPath.length - 1],
+          map,
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 8,
+            fillColor: "#F44336",
+            fillOpacity: 1,
+            strokeColor: "#ffffff",
+            strokeWeight: 2
+          }
+        });
 
         lastProgressIndex = 0;
         lastProgressTime = null;
@@ -302,38 +277,6 @@
       });
     }
 
-    function addStartEndMarkers() {
-      if (startMarker) startMarker.setMap(null);
-      if (endMarker) endMarker.setMap(null);
-
-      if (fullPath.length > 0) {
-        startMarker = new google.maps.Marker({
-          position: fullPath[0],
-          map,
-          icon: {
-            path: google.maps.SymbolPath.CIRCLE,
-            scale: 8,
-            fillColor: "#1A73E8",
-            fillOpacity: 1,
-            strokeColor: "#fff",
-            strokeWeight: 3
-          }
-        });
-        endMarker = new google.maps.Marker({
-          position: fullPath[fullPath.length - 1],
-          map,
-          icon: {
-            path: google.maps.SymbolPath.CIRCLE,
-            scale: 8,
-            fillColor: "#1A73E8",
-            fillOpacity: 1,
-            strokeColor: "#fff",
-            strokeWeight: 3
-          }
-        });
-      }
-    }
-
     function resetPathState() {
       fullPath = [];
       cumDist = [];
@@ -342,47 +285,36 @@
       doneRouteBase.setPath([]);
       upcomingRoute.setPath([]);
       upcomingRouteBase.setPath([]);
-      if (startMarker) startMarker.setMap(null);
-      if (endMarker) endMarker.setMap(null);
-      document.getElementById("startNavBtn").disabled = true;
+      if (startCircle) startCircle.setMap(null);
+      if (endCircle) endCircle.setMap(null);
     }
 
-    function resetNavigation() {
-      navigationStarted = false;
-      lastProgressIndex = 0;
-      lastProgressTime = null;
-      lastProgressMeters = 0;
-      hideProgressBar();
-      hidePopup();
-      if (wrongPathTimer) {
-        clearTimeout(wrongPathTimer);
-        wrongPathTimer = null;
-      }
-      wrongPathPopupShown = false;
-      document.getElementById("startNavBtn").disabled = false;
-    }
-
-    // Geolocation update handler
+    // ---------------- GPS ----------------
     function onPositionUpdate(pos) {
       const currentPos = new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
-      const headingDegrees = pos.coords.heading !== null && !isNaN(pos.coords.heading) ? pos.coords.heading : 0;
 
       if (!gpsMarker) {
         gpsMarker = new google.maps.Marker({
           position: currentPos,
           map,
           zIndex: 999,
-          icon: Object.assign({}, arrowIcon, { rotation: headingDegrees })
+          icon: {
+            path: google.maps.SymbolPath.CIRCLE,
+            scale: 10,
+            fillColor: "#1A73E8",
+            fillOpacity: 1,
+            strokeColor: "#ffffff",
+            strokeWeight: 2,
+          }
         });
       } else {
         gpsMarker.setPosition(currentPos);
-        arrowIcon.rotation = headingDegrees;
-        gpsMarker.setIcon(arrowIcon);
       }
 
-      // Rotate map on desktop (only if tilt 45 for 3D)
-      if (map.getTilt() === 45) {
-        map.setHeading(headingDegrees);
+      if (!hasCenteredOnGPS) {
+        map.setCenter(currentPos);
+        map.setZoom(17);
+        hasCenteredOnGPS = true;
       }
 
       if (!navigationStarted) {
@@ -416,57 +348,49 @@
       document.getElementById("startNavBtn").disabled = true;
       showProgressBar();
       updateProgressUI(0, totalDist);
-      hidePopup();
-
-      if (wrongPathTimer) clearTimeout(wrongPathTimer);
-      wrongPathPopupShown = false;
     }
 
-    // Compute user progress on route and update UI
+    // ---------------- Progress ----------------
     function updateSmoothProgress(currentPos) {
       if (!fullPath.length) return;
 
-      // Search close segments to project user position
       const searchStart = Math.max(lastProgressIndex - 5, 0);
-      let best = { dist: Infinity, segIndex: -1, projPoint: null, t: 0, cumMetersAtProj: 0 };
+      let best = { dist: Infinity, segIndex: -1, projPoint: null, projRatio: 0, cumMetersAtProj: 0 };
 
       for (let i = searchStart; i < fullPath.length - 1; i++) {
         const a = fullPath[i];
         const b = fullPath[i + 1];
+
         const proj = projectPointOnSegment(currentPos, a, b);
         if (!proj) continue;
+
         const d = google.maps.geometry.spherical.computeDistanceBetween(currentPos, proj.point);
         if (d < best.dist) {
           best.dist = d;
           best.segIndex = i;
           best.projPoint = proj.point;
-          best.t = proj.t;
+          best.projRatio = proj.t;
           const distToA = cumDist[i];
           const segLen = google.maps.geometry.spherical.computeDistanceBetween(a, b);
           best.cumMetersAtProj = distToA + segLen * proj.t;
         }
       }
+
       if (best.segIndex === -1) return;
 
-      // Show wrong path popup if too far (>25m)
-      if (best.dist > 25) {
-        showWrongPathPopup();
-      } else {
-        hidePopup();
-        wrongPathPopupShown = false;
-        if (wrongPathTimer) {
-          clearTimeout(wrongPathTimer);
-          wrongPathTimer = null;
-        }
+      const metersAdvanced = best.cumMetersAtProj - (cumDist[lastProgressIndex] || 0);
+      if (metersAdvanced < -5) return;
+
+      const donePts = [];
+      if (best.segIndex >= 0) {
+        for (let i = 0; i <= best.segIndex; i++) donePts.push(fullPath[i]);
+        donePts.push(best.projPoint);
       }
 
-      // Update polylines for done and upcoming path
-      const donePts = [];
-      for (let i = 0; i <= best.segIndex; i++) donePts.push(fullPath[i]);
-      donePts.push(best.projPoint);
-
       const futurePts = [best.projPoint];
-      for (let i = best.segIndex + 1; i < fullPath.length; i++) futurePts.push(fullPath[i]);
+      for (let i = best.segIndex + 1; i < fullPath.length; i++) {
+        futurePts.push(fullPath[i]);
+      }
 
       doneRoute.setPath(donePts);
       doneRouteBase.setPath(donePts);
@@ -479,35 +403,37 @@
       const remain = Math.max(0, totalDist - doneMeters);
       const pct = totalDist > 0 ? (doneMeters / totalDist) * 100 : 0;
       updateProgressUI(pct, remain);
-
-      // Arrival popup if within 15m of destination
-      if (remain < 15) {
-        showArrivalPopup();
-        resetNavigation();
-      }
     }
 
     function projectPointOnSegment(p, a, b) {
-      // Projects point p on line segment a-b in lat/lng space
       const ax = a.lng(), ay = a.lat();
       const bx = b.lng(), by = b.lat();
       const px = p.lng(), py = p.lat();
+
       const abx = bx - ax;
       const aby = by - ay;
       const apx = px - ax;
       const apy = py - ay;
+
       const ab2 = abx * abx + aby * aby;
       if (ab2 === 0) return null;
+
       let t = (apx * abx + apy * aby) / ab2;
       t = Math.max(0, Math.min(1, t));
+
       const qx = ax + abx * t;
       const qy = ay + aby * t;
+
       return { point: new google.maps.LatLng(qy, qx), t };
     }
 
-    // UI PROGRESS BAR
-    function showProgressBar() { document.getElementById("progressBarWrapper").style.display = "block"; }
-    function hideProgressBar() { document.getElementById("progressBarWrapper").style.display = "none"; }
+    // ---------------- Progress UI ----------------
+    function showProgressBar() {
+      document.getElementById("progressBarWrapper").style.display = "block";
+    }
+    function hideProgressBar() {
+      document.getElementById("progressBarWrapper").style.display = "none";
+    }
 
     function updateProgressUI(percent, remainingMeters) {
       const pctRounded = Math.min(100, Math.max(0, percent)).toFixed(1);
@@ -527,12 +453,10 @@
         const dt = (now - lastProgressTime) / 1000;
         const dMeters = (totalDist - remainingMeters) - lastProgressMeters;
         if (dMeters > 1 && dt > 1) {
-          const speedMps = dMeters / dt;
-          if (speedMps > 0.1) {
-            const etaSec = remainingMeters / speedMps;
-            etaText.textContent = "ETA: " + formatTime(etaSec);
-          } else {
-            etaText.textContent = "ETA: —";
+          const speed = dMeters / dt;
+          if (speed > 0.3) {
+            const secLeft = remainingMeters / speed;
+            etaText.textContent = `ETA: ${formatDuration(secLeft)}`;
           }
           lastProgressTime = now;
           lastProgressMeters = totalDist - remainingMeters;
@@ -540,118 +464,84 @@
       }
     }
 
-    function formatDistance(meters) {
-      if (meters >= 1000) {
-        return (meters / 1000).toFixed(2) + " km";
+    function formatDistance(m) {
+      return m >= 1000 ? (m / 1000).toFixed(2) + " km" : Math.round(m) + " m";
+    }
+
+    function formatDuration(sec) {
+      const m = Math.floor(sec / 60);
+      const s = Math.floor(sec % 60);
+      if (m >= 60) {
+        const h = Math.floor(m / 60);
+        const mm = m % 60;
+        return `${h}h ${mm}m`;
       }
-      return Math.round(meters) + " m";
-    }
-    function formatTime(sec) {
-      const minutes = Math.floor(sec / 60);
-      const seconds = Math.floor(sec % 60);
-      return minutes + "m " + seconds + "s";
+      return `${m}m ${s}s`;
     }
 
-    // Popup management
-    function showPopup(message) {
-      const popup = document.getElementById("popup");
-      document.getElementById("popupMessage").textContent = message;
-      popup.style.display = "block";
-    }
-    function hidePopup() {
-      document.getElementById("popup").style.display = "none";
-    }
-    function closePopup() {
-      hidePopup();
-      // Restart timer if popup is for wrong path
-      if (wrongPathPopupShown) {
-        scheduleWrongPathPopup();
-      }
+    function resetNavigation() {
+      navigationStarted = false;
+      document.getElementById("startNavBtn").disabled = true;
+      hideProgressBar();
+      lastProgressIndex = 0;
+      lastProgressTime = null;
+      lastProgressMeters = 0;
     }
 
-    // Wrong path popup (shown every 5 minutes if user off-route)
-    function showWrongPathPopup() {
-      if (wrongPathPopupShown) return; // Already showing or scheduled
-
-      showPopup("Your path is wrong. Please follow the route.");
-      wrongPathPopupShown = true;
-
-      scheduleWrongPathPopup();
-    }
-    function scheduleWrongPathPopup() {
-      if (wrongPathTimer) clearTimeout(wrongPathTimer);
-      // Show again in 5 minutes if user still off route
-      wrongPathTimer = setTimeout(() => {
-        wrongPathPopupShown = false;
-        // Check if still off-route; will re-trigger popup on next update
-      }, 5 * 60 * 1000);
+    // ---------------- UI Helpers ----------------
+    function clearRoute() {
+      if (!confirm("Clear route?")) return;
+      waypoints = [];
+      waypointMarkers.forEach(m => m.setMap(null));
+      waypointMarkers = [];
+      directionsRenderer.setDirections({ routes: [] });
+      resetPathState();
+      resetNavigation();
+      document.getElementById("shareLink").value = "";
+      localStorage.removeItem("savedPath");
     }
 
-    // Arrival popup
-    function showArrivalPopup() {
-      showPopup("🎉 Yep! You have reached your destination.");
-    }
-
-    // Share/save/load functionality
     function savePath() {
-      if (waypoints.length < 2) {
-        alert("Add at least two waypoints before saving.");
-        return;
-      }
-      const arr = waypoints.map(p => p.lat() + "," + p.lng());
-      localStorage.setItem("savedRoute", JSON.stringify(arr));
-      alert("Route saved locally.");
+      if (!waypoints.length) return alert("No path to save!");
+      const points = waypoints.map(p => `${p.lat()},${p.lng()}`).join(";");
+      localStorage.setItem("savedPath", points);
+      alert("Path saved!");
     }
 
     function loadSavedPath() {
-      const saved = localStorage.getItem("savedRoute");
-      if (!saved) {
-        alert("No saved route found.");
-        return;
-      }
-      clearRoute();
-      const arr = JSON.parse(saved);
-      arr.forEach(str => {
-        const [lat, lng] = str.split(",");
-        addWaypoint(new google.maps.LatLng(parseFloat(lat), parseFloat(lng)));
-      });
+      const saved = localStorage.getItem("savedPath");
+      if (!saved) return alert("No saved path found!");
+      loadPoints(saved);
     }
 
     function generateShareLink() {
-      if (waypoints.length < 2) {
-        alert("Add at least two waypoints before generating share link.");
-        return;
-      }
-      const baseURL = window.location.origin + window.location.pathname;
-      const pointsStr = waypoints.map(p => p.lat().toFixed(6) + "," + p.lng().toFixed(6)).join(";");
-      const url = `${baseURL}?points=${encodeURIComponent(pointsStr)}`;
-      const shareInput = document.getElementById("shareLink");
-      shareInput.value = url;
-      shareInput.select();
-      document.execCommand("copy");
-      alert("Share link copied to clipboard.");
+      if (waypoints.length < 2) return alert("Add at least two points.");
+      const points = waypoints.map(p => `${p.lat()},${p.lng()}`).join(";");
+      const url = `${window.location.href.split("?")[0]}?points=${encodeURIComponent(points)}`;
+      document.getElementById("shareLink").value = url;
+      if (navigator.clipboard) navigator.clipboard.writeText(url);
+      alert("Link copied!");
     }
 
     function loadPointsFromURL() {
       const params = new URLSearchParams(window.location.search);
-      const pts = params.get("points");
-      if (!pts) return;
-
-      const latlngs = pts.split(";").map(s => {
-        const [lat, lng] = s.split(",");
-        return new google.maps.LatLng(parseFloat(lat), parseFloat(lng));
-      });
-
-      latlngs.forEach(p => addWaypoint(p));
+      if (!params.has("points")) return;
+      loadPoints(params.get("points"));
     }
 
-    function clearRoute() {
+    function loadPoints(rawPoints) {
+      const arr = rawPoints.split(";");
+      waypoints = [];
       waypointMarkers.forEach(m => m.setMap(null));
       waypointMarkers = [];
-      waypoints = [];
-      resetPathState();
-      resetNavigation();
-      document.getElementById("shareLink").value = "";
+      arr.forEach((p, idx) => {
+        const [lat, lng] = p.split(",").map(Number);
+        const latLng = new google.maps.LatLng(lat, lng);
+        waypoints.push(latLng);
+        waypointMarkers.push(createMarker(latLng, idx));
+      });
+      relabelMarkers();
+      updateRoute();
     }
   </script>
 </body>
