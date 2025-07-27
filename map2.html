@@ -69,7 +69,6 @@
     let cumDist = [];
     let totalDist = 0;
 
-    // Enhanced route polylines
     let upcomingRouteBase, upcomingRoute, doneRouteBase, doneRoute;
     let startCircle, endCircle;
 
@@ -84,6 +83,14 @@
       map = new google.maps.Map(document.getElementById("map"), {
         center: { lat: 12.93, lng: 77.61 },
         zoom: 15,
+        mapTypeId: "hybrid",
+        tilt: 45,
+        heading: 0,
+        gestureHandling: "greedy",
+        zoomControl: true,
+        rotateControl: true,
+        streetViewControl: false,
+        mapTypeControl: true
       });
 
       directionsService = new google.maps.DirectionsService();
@@ -94,7 +101,6 @@
         polylineOptions: { strokeOpacity: 0 }
       });
 
-      // Create enhanced polylines for depth
       upcomingRouteBase = new google.maps.Polyline({
         map,
         strokeColor: "#ffffff",
@@ -140,7 +146,6 @@
       loadPointsFromURL();
     }
 
-    // ---------------- Waypoints ----------------
     function addWaypoint(latlng) {
       waypoints.push(latlng);
       const marker = createMarker(latlng, waypoints.length - 1);
@@ -184,7 +189,6 @@
       waypointMarkers.forEach((m, i) => m.setLabel(`${i + 1}`));
     }
 
-    // ---------------- Route ----------------
     function updateRoute() {
       if (waypoints.length < 2) {
         directionsRenderer.setDirections({ routes: [] });
@@ -216,7 +220,6 @@
 
         directionsRenderer.setDirections(result);
 
-        // Build high-resolution path
         fullPath = [];
         const route = result.routes[0];
         route.legs.forEach(leg => {
@@ -232,13 +235,11 @@
         }
         totalDist = cumDist[cumDist.length - 1];
 
-        // Reset polylines
         doneRoute.setPath([]);
         doneRouteBase.setPath([]);
         upcomingRoute.setPath(fullPath);
         upcomingRouteBase.setPath(fullPath);
 
-        // Start & End markers
         if (startCircle) startCircle.setMap(null);
         if (endCircle) endCircle.setMap(null);
 
@@ -289,7 +290,6 @@
       if (endCircle) endCircle.setMap(null);
     }
 
-    // ---------------- GPS ----------------
     function onPositionUpdate(pos) {
       const currentPos = new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
 
@@ -350,7 +350,6 @@
       updateProgressUI(0, totalDist);
     }
 
-    // ---------------- Progress ----------------
     function updateSmoothProgress(currentPos) {
       if (!fullPath.length) return;
 
@@ -427,7 +426,6 @@
       return { point: new google.maps.LatLng(qy, qx), t };
     }
 
-    // ---------------- Progress UI ----------------
     function showProgressBar() {
       document.getElementById("progressBarWrapper").style.display = "block";
     }
@@ -488,7 +486,6 @@
       lastProgressMeters = 0;
     }
 
-    // ---------------- UI Helpers ----------------
     function clearRoute() {
       if (!confirm("Clear route?")) return;
       waypoints = [];
