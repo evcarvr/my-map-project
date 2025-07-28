@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>Marathon Walking Route</title>
+  <title>Marathon Walking Route - Author & Follower Mode</title>
   <style>
     #map { height: 90vh; width: 100%; }
     #controls { margin: 10px; display:flex; flex-wrap:wrap; gap:6px; align-items:center; }
@@ -35,16 +35,23 @@
     }
     .muted { color: #ddd; font-size: 12px; font-weight: bold; }
     input[type=text] { width: 80%; }
+    button { cursor: pointer; }
+    #followerNote {
+      margin-left: 10px;
+      font-style: italic;
+      color: #666;
+    }
   </style>
 </head>
 <body>
   <div id="controls">
-    <button onclick="clearRoute()">Clear Route</button>
-    <button onclick="savePath()">Save Path</button>
-    <button onclick="loadSavedPath()">Load Saved Path</button>
-    <button onclick="generateShareLink()">Generate Shareable Link</button>
+    <button id="clearBtn" onclick="clearRoute()">Clear Route</button>
+    <button id="saveBtn" onclick="savePath()">Save Path</button>
+    <button id="loadBtn" onclick="loadSavedPath()">Load Saved Path</button>
+    <button id="shareBtn" onclick="generateShareLink()">Generate Shareable Link</button>
     <button id="startNavBtn" disabled onclick="startNavigation()">Start Navigation</button>
-    <input type="text" id="shareLink" readonly onclick="this.select()">
+    <input type="text" id="shareLink" readonly onclick="this.select()" placeholder="Shareable link appears here">
+    <div id="followerNote" style="display:none;">You are in follower mode. Route is read-only.</div>
   </div>
 
   <div id="progressBarWrapper" style="display:none">
@@ -78,6 +85,11 @@
 
     let lastProgressTime = null;
     let lastProgressMeters = 0;
+
+    // Get URL mode param - default to author if absent
+    const urlParams = new URLSearchParams(window.location.search);
+    const modeParam = urlParams.get("mode");
+    const isAuthor = modeParam !== "follower"; // true if no mode or mode!=follower
 
     function createMarkerIcon(label, fillColor) {
       const svg = `
@@ -139,7 +151,12 @@
         zIndex: 2
       });
 
-      map.addListener("click", e => addWaypoint(e.latLng));
+      if (isAuthor) {
+        map.addListener("click", e => addWaypoint(e.latLng));
+        showAuthorControls(true);
+      } else {
+        showAuthorControls(false);
+      }
 
       if (navigator.geolocation) {
         navigator.geolocation.watchPosition(
@@ -150,33 +167,51 @@
       }
 
       loadPointsFromURL();
+
+      // Enable start navigation button if route loaded
+      if (waypoints.length > 1) {
+        document.getElementById("startNavBtn").disabled = false;
+      }
+    }
+
+    function showAuthorControls(show) {
+      document.getElementById("clearBtn").style.display = show ? "inline-block" : "none";
+      document.getElementById("saveBtn").style.display = show ? "inline-block" : "none";
+      document.getElementById("loadBtn").style.display = show ? "inline-block" : "none";
+      document.getElementById("shareBtn").style.display = show ? "inline-block" : "none";
+      document.getElementById("shareLink").style.display = show ? "inline-block" : "none";
+      document.getElementById("followerNote").style.display = show ? "none" : "inline-block";
     }
 
     function createMarker(latlng, index) {
       const marker = new google.maps.Marker({
         position: latlng,
         map,
-        icon: createMarkerIcon(index + 1, "#FF0000"), // red color by default
-        draggable: true
+        icon: createMarkerIcon(index + 1, "#FF0000"), // red default
+        draggable: isAuthor
       });
 
-      marker.addListener("click", () => {
-        const idx = waypointMarkers.findIndex(obj => obj.marker === marker);
-        if (idx !== -1) deleteWaypoint(idx);
-      });
+      if (isAuthor) {
+        marker.addListener("click", () => {
+          const idx = waypointMarkers.findIndex(obj => obj.marker === marker);
+          if (idx !== -1) deleteWaypoint(idx);
+        });
 
-      marker.addListener("dragend", () => {
-        const idx = waypointMarkers.findIndex(obj => obj.marker === marker);
-        if (idx !== -1) {
-          waypoints[idx] = marker.getPosition();
-          updateRoute();
-        }
-      });
+        marker.addListener("dragend", () => {
+          const idx = waypointMarkers.findIndex(obj => obj.marker === marker);
+          if (idx !== -1) {
+            waypoints[idx] = marker.getPosition();
+            updateRoute();
+          }
+        });
+      }
 
       return marker;
     }
 
     function addWaypoint(latlng) {
+      if (!isAuthor) return; // Followers can't add
+
       waypoints.push(latlng);
       const marker = createMarker(latlng, waypoints.length - 1);
       waypointMarkers.push({ marker, crossed: false });
@@ -184,6 +219,8 @@
     }
 
     function deleteWaypoint(index) {
+      if (!isAuthor) return;
+
       waypointMarkers[index].marker.setMap(null);
       waypointMarkers.splice(index, 1);
       waypoints.splice(index, 1);
@@ -387,13 +424,13 @@
       const pct = totalDist > 0 ? (doneMeters / totalDist) * 100 : 0;
       updateProgressUI(pct, remain);
 
-      // Change waypoint marker color on crossing
+      // Update waypoint markers to green if crossed
       waypoints.forEach((wp, i) => {
         if (!waypointMarkers[i].crossed) {
-          const distTo = google.maps.geometry.spherical.computeDistanceBetween(wp, best.projPoint);
-          if (distTo < 20) { // 20 meters threshold
+          const wpIndex = fullPath.findIndex(p => google.maps.geometry.spherical.computeDistanceBetween(p, wp) < 5);
+          if (wpIndex !== -1 && wpIndex <= best.segIndex) {
             waypointMarkers[i].crossed = true;
-            waypointMarkers[i].marker.setIcon(createMarkerIcon(i + 1, "#00c853")); // green pin with number
+            waypointMarkers[i].marker.setIcon(createMarkerIcon(i + 1, "#00c853"));
           }
         }
       });
@@ -458,106 +495,112 @@
     }
 
     function formatDuration(sec) {
-      const m = Math.floor(sec / 60);
+      const h = Math.floor(sec / 3600);
+      const m = Math.floor((sec % 3600) / 60);
       const s = Math.floor(sec % 60);
-      return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m ${s}s`;
-    }
-
-    function resetPathState() {
-      fullPath = [];
-      cumDist = [];
-      totalDist = 0;
-      doneRoute.setPath([]);
-      doneRouteBase.setPath([]);
-      upcomingRoute.setPath([]);
-      upcomingRouteBase.setPath([]);
-      if (startCircle) startCircle.setMap(null);
-      if (endCircle) endCircle.setMap(null);
-    }
-
-    function resetNavigation() {
-      navigationStarted = false;
-      document.getElementById("startNavBtn").disabled = true;
-      hideProgressBar();
-      lastProgressIndex = 0;
-      lastProgressTime = null;
-      lastProgressMeters = 0;
+      if (h > 0) return `${h}h ${m}m`;
+      if (m > 0) return `${m}m ${s}s`;
+      return `${s}s`;
     }
 
     function clearRoute() {
-      if (!confirm("Clear route?")) return;
+      if (!isAuthor) return;
       waypoints = [];
-      waypointMarkers.forEach(obj => obj.marker.setMap(null));
+      waypointMarkers.forEach(o => o.marker.setMap(null));
       waypointMarkers = [];
       directionsRenderer.setDirections({ routes: [] });
       resetPathState();
       resetNavigation();
+      document.getElementById("startNavBtn").disabled = true;
       document.getElementById("shareLink").value = "";
-      localStorage.removeItem("savedPath");
-    }
-
-    function loadPointsFromURL() {
-      const params = new URLSearchParams(window.location.search);
-      if (params.has("points")) {
-        loadPoints(params.get("points"));
-      } else {
-        // Try loading from localStorage if no URL
-        const saved = localStorage.getItem("savedPath");
-        if (saved) {
-          console.log("Auto-loading from localStorage...");
-          loadPoints(saved);
-        }
-      }
+      hideProgressBar();
     }
 
     function savePath() {
-      if (!waypoints.length) {
-        alert("No path to save!");
+      if (!isAuthor) return;
+      if (waypoints.length < 2) {
+        alert("Add at least two points before saving.");
         return;
       }
       const points = waypoints.map(p => `${p.lat()},${p.lng()}`).join(";");
-      localStorage.setItem("savedPath", points);
-      alert("Path saved successfully!");
+      localStorage.setItem("savedRoutePoints", points);
+      alert("Route saved locally in browser storage.");
     }
 
     function loadSavedPath() {
-      const saved = localStorage.getItem("savedPath");
-      if (!saved) {
-        alert("No saved path found!");
+      if (!isAuthor) return;
+      const points = localStorage.getItem("savedRoutePoints");
+      if (!points) {
+        alert("No saved route found.");
         return;
       }
-      console.log("Loaded from localStorage:", saved);
-      loadPoints(saved);
+      const coords = points.split(";").map(s => {
+        const [lat, lng] = s.split(",").map(Number);
+        return new google.maps.LatLng(lat, lng);
+      });
+      clearRoute();
+      coords.forEach(c => addWaypoint(c));
+      document.getElementById("startNavBtn").disabled = coords.length > 1 ? false : true;
     }
 
     function generateShareLink() {
+      if (!isAuthor) return;
       if (waypoints.length < 2) {
         alert("Add at least two points to share.");
         return;
       }
       const points = waypoints.map(p => `${p.lat()},${p.lng()}`).join(";");
       const baseUrl = window.location.href.split("?")[0];
-      const url = `${baseUrl}?points=${encodeURIComponent(points)}`;
+      const url = `${baseUrl}?mode=follower&points=${encodeURIComponent(points)}`;
       const shareInput = document.getElementById("shareLink");
       shareInput.value = url;
       if (navigator.clipboard) navigator.clipboard.writeText(url);
       alert("Shareable link copied to clipboard!");
     }
 
-    function loadPoints(rawPoints) {
-      const arr = rawPoints.split(";");
-      waypoints = [];
-      waypointMarkers.forEach(obj => obj.marker.setMap(null));
-      waypointMarkers = [];
-      arr.forEach((p, idx) => {
-        const [lat, lng] = p.split(",").map(Number);
-        const latLng = new google.maps.LatLng(lat, lng);
-        waypoints.push(latLng);
-        const marker = createMarker(latLng, idx);
-        waypointMarkers.push({ marker, crossed: false });
+    function loadPointsFromURL() {
+      const pointsParam = urlParams.get("points");
+      if (!pointsParam) return;
+
+      const coords = pointsParam.split(";").map(s => {
+        const [lat, lng] = s.split(",").map(Number);
+        return new google.maps.LatLng(lat, lng);
       });
-      relabelMarkers();
-      updateRoute();
+
+      clearRoute();
+      coords.forEach(c => addWaypoint(c));
+      document.getElementById("startNavBtn").disabled = coords.length > 1 ? false : true;
+    }
+
+    function resetPathState() {
+      fullPath = [];
+      cumDist = [];
+      totalDist = 0;
+      if (startCircle) {
+        startCircle.setMap(null);
+        startCircle = null;
+      }
+      if (endCircle) {
+        endCircle.setMap(null);
+        endCircle = null;
+      }
+      doneRoute.setPath([]);
+      doneRouteBase.setPath([]);
+      upcomingRoute.setPath([]);
+      upcomingRouteBase.setPath([]);
+      waypointMarkers.forEach(o => {
+        o.crossed = false;
+        if (o.marker) o.marker.setIcon(createMarkerIcon(waypointMarkers.indexOf(o) + 1, "#FF0000"));
+      });
+    }
+
+    function resetNavigation() {
+      navigationStarted = false;
+      lastProgressIndex = 0;
+      lastProgressTime = null;
+      lastProgressMeters = 0;
+      hideProgressBar();
+      document.getElementById("startNavBtn").disabled = waypoints.length < 2;
     }
   </script>
 </body>
