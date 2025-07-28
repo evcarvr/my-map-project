@@ -69,7 +69,6 @@
     let cumDist = [];
     let totalDist = 0;
 
-    // Enhanced route polylines
     let upcomingRouteBase, upcomingRoute, doneRouteBase, doneRoute;
     let startCircle, endCircle;
 
@@ -79,6 +78,20 @@
 
     let lastProgressTime = null;
     let lastProgressMeters = 0;
+
+    function createMarkerIcon(label, fillColor) {
+      const svg = `
+      <svg width="32" height="48" viewBox="0 0 32 48" xmlns="http://www.w3.org/2000/svg">
+        <path fill="${fillColor}" stroke="white" stroke-width="2" d="M16 0c-7 0-12.7 5.7-12.7 12.7 0 9.5 12.7 35.3 12.7 35.3s12.7-25.8 12.7-35.3C28.7 5.7 23 0 16 0z"/>
+        <text x="16" y="20" font-size="16" font-weight="bold" text-anchor="middle" fill="white" font-family="Arial" dominant-baseline="middle">${label}</text>
+      </svg>
+      `;
+      return {
+        url: "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(svg),
+        scaledSize: new google.maps.Size(32, 48),
+        labelOrigin: new google.maps.Point(16, 18)
+      };
+    }
 
     function initMap() {
       map = new google.maps.Map(document.getElementById("map"), {
@@ -94,7 +107,6 @@
         polylineOptions: { strokeOpacity: 0 }
       });
 
-      // Create enhanced polylines for depth
       upcomingRouteBase = new google.maps.Polyline({
         map,
         strokeColor: "#ffffff",
@@ -140,29 +152,21 @@
       loadPointsFromURL();
     }
 
-    // ---------------- Waypoints ----------------
-    function addWaypoint(latlng) {
-      waypoints.push(latlng);
-      const marker = createMarker(latlng, waypoints.length - 1);
-      waypointMarkers.push(marker);
-      updateRoute();
-    }
-
     function createMarker(latlng, index) {
       const marker = new google.maps.Marker({
         position: latlng,
         map,
-        label: `${index + 1}`,
+        icon: createMarkerIcon(index + 1, "#FF0000"), // red color by default
         draggable: true
       });
 
       marker.addListener("click", () => {
-        const idx = waypointMarkers.indexOf(marker);
+        const idx = waypointMarkers.findIndex(obj => obj.marker === marker);
         if (idx !== -1) deleteWaypoint(idx);
       });
 
       marker.addListener("dragend", () => {
-        const idx = waypointMarkers.indexOf(marker);
+        const idx = waypointMarkers.findIndex(obj => obj.marker === marker);
         if (idx !== -1) {
           waypoints[idx] = marker.getPosition();
           updateRoute();
@@ -172,8 +176,15 @@
       return marker;
     }
 
+    function addWaypoint(latlng) {
+      waypoints.push(latlng);
+      const marker = createMarker(latlng, waypoints.length - 1);
+      waypointMarkers.push({ marker, crossed: false });
+      updateRoute();
+    }
+
     function deleteWaypoint(index) {
-      waypointMarkers[index].setMap(null);
+      waypointMarkers[index].marker.setMap(null);
       waypointMarkers.splice(index, 1);
       waypoints.splice(index, 1);
       relabelMarkers();
@@ -181,10 +192,11 @@
     }
 
     function relabelMarkers() {
-      waypointMarkers.forEach((m, i) => m.setLabel(`${i + 1}`));
+      waypointMarkers.forEach((obj, i) => {
+        obj.marker.setIcon(createMarkerIcon(i + 1, obj.crossed ? "#00c853" : "#FF0000"));
+      });
     }
 
-    // ---------------- Route ----------------
     function updateRoute() {
       if (waypoints.length < 2) {
         directionsRenderer.setDirections({ routes: [] });
@@ -204,8 +216,7 @@
         origin,
         destination,
         waypoints: midpoints,
-        travelMode: google.maps.TravelMode.WALKING,
-        provideRouteAlternatives: false
+        travelMode: google.maps.TravelMode.WALKING
       };
 
       directionsService.route(request, (result, status) => {
@@ -216,7 +227,6 @@
 
         directionsRenderer.setDirections(result);
 
-        // Build high-resolution path
         fullPath = [];
         const route = result.routes[0];
         route.legs.forEach(leg => {
@@ -232,13 +242,11 @@
         }
         totalDist = cumDist[cumDist.length - 1];
 
-        // Reset polylines
         doneRoute.setPath([]);
         doneRouteBase.setPath([]);
         upcomingRoute.setPath(fullPath);
         upcomingRouteBase.setPath(fullPath);
 
-        // Start & End markers
         if (startCircle) startCircle.setMap(null);
         if (endCircle) endCircle.setMap(null);
 
@@ -277,19 +285,6 @@
       });
     }
 
-    function resetPathState() {
-      fullPath = [];
-      cumDist = [];
-      totalDist = 0;
-      doneRoute.setPath([]);
-      doneRouteBase.setPath([]);
-      upcomingRoute.setPath([]);
-      upcomingRouteBase.setPath([]);
-      if (startCircle) startCircle.setMap(null);
-      if (endCircle) endCircle.setMap(null);
-    }
-
-    // ---------------- GPS ----------------
     function onPositionUpdate(pos) {
       const currentPos = new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
 
@@ -304,7 +299,7 @@
             fillColor: "#1A73E8",
             fillOpacity: 1,
             strokeColor: "#ffffff",
-            strokeWeight: 2,
+            strokeWeight: 2
           }
         });
       } else {
@@ -350,7 +345,6 @@
       updateProgressUI(0, totalDist);
     }
 
-    // ---------------- Progress ----------------
     function updateSmoothProgress(currentPos) {
       if (!fullPath.length) return;
 
@@ -378,19 +372,8 @@
 
       if (best.segIndex === -1) return;
 
-      const metersAdvanced = best.cumMetersAtProj - (cumDist[lastProgressIndex] || 0);
-      if (metersAdvanced < -5) return;
-
-      const donePts = [];
-      if (best.segIndex >= 0) {
-        for (let i = 0; i <= best.segIndex; i++) donePts.push(fullPath[i]);
-        donePts.push(best.projPoint);
-      }
-
-      const futurePts = [best.projPoint];
-      for (let i = best.segIndex + 1; i < fullPath.length; i++) {
-        futurePts.push(fullPath[i]);
-      }
+      const donePts = fullPath.slice(0, best.segIndex + 1).concat([best.projPoint]);
+      const futurePts = [best.projPoint].concat(fullPath.slice(best.segIndex + 1));
 
       doneRoute.setPath(donePts);
       doneRouteBase.setPath(donePts);
@@ -403,6 +386,17 @@
       const remain = Math.max(0, totalDist - doneMeters);
       const pct = totalDist > 0 ? (doneMeters / totalDist) * 100 : 0;
       updateProgressUI(pct, remain);
+
+      // Change waypoint marker color on crossing
+      waypoints.forEach((wp, i) => {
+        if (!waypointMarkers[i].crossed) {
+          const distTo = google.maps.geometry.spherical.computeDistanceBetween(wp, best.projPoint);
+          if (distTo < 20) { // 20 meters threshold
+            waypointMarkers[i].crossed = true;
+            waypointMarkers[i].marker.setIcon(createMarkerIcon(i + 1, "#00c853")); // green pin with number
+          }
+        }
+      });
     }
 
     function projectPointOnSegment(p, a, b) {
@@ -427,7 +421,6 @@
       return { point: new google.maps.LatLng(qy, qx), t };
     }
 
-    // ---------------- Progress UI ----------------
     function showProgressBar() {
       document.getElementById("progressBarWrapper").style.display = "block";
     }
@@ -437,17 +430,13 @@
 
     function updateProgressUI(percent, remainingMeters) {
       const pctRounded = Math.min(100, Math.max(0, percent)).toFixed(1);
-      const progText = document.getElementById("progressText");
-      const progInner = document.getElementById("progressInner");
-      const etaText = document.getElementById("etaText");
-
-      progInner.style.width = pctRounded + "%";
-      progText.textContent = `${pctRounded}% • ${formatDistance(remainingMeters)} left`;
+      document.getElementById("progressInner").style.width = pctRounded + "%";
+      document.getElementById("progressText").textContent = `${pctRounded}% • ${formatDistance(remainingMeters)} left`;
 
       if (lastProgressTime == null) {
         lastProgressTime = Date.now();
         lastProgressMeters = totalDist - remainingMeters;
-        etaText.textContent = "";
+        document.getElementById("etaText").textContent = "";
       } else {
         const now = Date.now();
         const dt = (now - lastProgressTime) / 1000;
@@ -456,7 +445,7 @@
           const speed = dMeters / dt;
           if (speed > 0.3) {
             const secLeft = remainingMeters / speed;
-            etaText.textContent = `ETA: ${formatDuration(secLeft)}`;
+            document.getElementById("etaText").textContent = `ETA: ${formatDuration(secLeft)}`;
           }
           lastProgressTime = now;
           lastProgressMeters = totalDist - remainingMeters;
@@ -471,12 +460,19 @@
     function formatDuration(sec) {
       const m = Math.floor(sec / 60);
       const s = Math.floor(sec % 60);
-      if (m >= 60) {
-        const h = Math.floor(m / 60);
-        const mm = m % 60;
-        return `${h}h ${mm}m`;
-      }
-      return `${m}m ${s}s`;
+      return m >= 60 ? `${Math.floor(m / 60)}h ${m % 60}m` : `${m}m ${s}s`;
+    }
+
+    function resetPathState() {
+      fullPath = [];
+      cumDist = [];
+      totalDist = 0;
+      doneRoute.setPath([]);
+      doneRouteBase.setPath([]);
+      upcomingRoute.setPath([]);
+      upcomingRouteBase.setPath([]);
+      if (startCircle) startCircle.setMap(null);
+      if (endCircle) endCircle.setMap(null);
     }
 
     function resetNavigation() {
@@ -488,11 +484,10 @@
       lastProgressMeters = 0;
     }
 
-    // ---------------- UI Helpers ----------------
     function clearRoute() {
       if (!confirm("Clear route?")) return;
       waypoints = [];
-      waypointMarkers.forEach(m => m.setMap(null));
+      waypointMarkers.forEach(obj => obj.marker.setMap(null));
       waypointMarkers = [];
       directionsRenderer.setDirections({ routes: [] });
       resetPathState();
@@ -501,44 +496,65 @@
       localStorage.removeItem("savedPath");
     }
 
+    function loadPointsFromURL() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.has("points")) {
+        loadPoints(params.get("points"));
+      } else {
+        // Try loading from localStorage if no URL
+        const saved = localStorage.getItem("savedPath");
+        if (saved) {
+          console.log("Auto-loading from localStorage...");
+          loadPoints(saved);
+        }
+      }
+    }
+
     function savePath() {
-      if (!waypoints.length) return alert("No path to save!");
+      if (!waypoints.length) {
+        alert("No path to save!");
+        return;
+      }
       const points = waypoints.map(p => `${p.lat()},${p.lng()}`).join(";");
       localStorage.setItem("savedPath", points);
-      alert("Path saved!");
+      alert("Path saved successfully!");
     }
 
     function loadSavedPath() {
       const saved = localStorage.getItem("savedPath");
-      if (!saved) return alert("No saved path found!");
+      if (!saved) {
+        alert("No saved path found!");
+        return;
+      }
+      console.log("Loaded from localStorage:", saved);
       loadPoints(saved);
     }
 
     function generateShareLink() {
-      if (waypoints.length < 2) return alert("Add at least two points.");
+      if (waypoints.length < 2) {
+        alert("Add at least two points to share.");
+        return;
+      }
       const points = waypoints.map(p => `${p.lat()},${p.lng()}`).join(";");
-      const url = `${window.location.href.split("?")[0]}?points=${encodeURIComponent(points)}`;
-      document.getElementById("shareLink").value = url;
+      const baseUrl = window.location.href.split("?")[0];
+      const url = `${baseUrl}?points=${encodeURIComponent(points)}`;
+      const shareInput = document.getElementById("shareLink");
+      shareInput.value = url;
       if (navigator.clipboard) navigator.clipboard.writeText(url);
-      alert("Link copied!");
-    }
-
-    function loadPointsFromURL() {
-      const params = new URLSearchParams(window.location.search);
-      if (!params.has("points")) return;
-      loadPoints(params.get("points"));
+      alert("Shareable link copied to clipboard!");
     }
 
     function loadPoints(rawPoints) {
       const arr = rawPoints.split(";");
       waypoints = [];
-      waypointMarkers.forEach(m => m.setMap(null));
+      waypointMarkers.forEach(obj => obj.marker.setMap(null));
       waypointMarkers = [];
       arr.forEach((p, idx) => {
         const [lat, lng] = p.split(",").map(Number);
         const latLng = new google.maps.LatLng(lat, lng);
         waypoints.push(latLng);
-        waypointMarkers.push(createMarker(latLng, idx));
+        const marker = createMarker(latLng, idx);
+        waypointMarkers.push({ marker, crossed: false });
       });
       relabelMarkers();
       updateRoute();
@@ -546,5 +562,3 @@
   </script>
 </body>
 </html>
-
-
