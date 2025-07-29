@@ -289,7 +289,7 @@
         origin,
         destination,
         waypoints: midpoints,
-        travelMode: google.maps.TravelMode.WALKING
+        travelMode: google.maps.TravelMode.DRIVING
       };
 
       directionsService.route(request, (result, status) => {
@@ -460,15 +460,30 @@
       const pct = totalDist > 0 ? (doneMeters / totalDist) * 100 : 0;
       updateProgressUI(pct, remain);
 
+      // waypoints.forEach((wp, i) => {
+      //   if (!waypointMarkers[i].crossed) {
+      //     const wpIndex = fullPath.findIndex(p => google.maps.geometry.spherical.computeDistanceBetween(p, wp) < 5);
+      //     if (wpIndex !== -1 && wpIndex <= best.segIndex) {
+      //       waypointMarkers[i].crossed = true;
+      //       waypointMarkers[i].marker.setIcon(createMarkerIcon(i + 1, "#00c853")); // turn green
+      //     }
+      //   }
+      // });
       waypoints.forEach((wp, i) => {
-        if (!waypointMarkers[i].crossed) {
-          const wpIndex = fullPath.findIndex(p => google.maps.geometry.spherical.computeDistanceBetween(p, wp) < 5);
-          if (wpIndex !== -1 && wpIndex <= best.segIndex) {
-            waypointMarkers[i].crossed = true;
-            waypointMarkers[i].marker.setIcon(createMarkerIcon(i + 1, "#00c853")); // turn green
-          }
-        }
-      });
+  if (!waypointMarkers[i].crossed) {
+    const wpIndex = fullPath.findIndex(p => google.maps.geometry.spherical.computeDistanceBetween(p, wp) < 5);
+
+    // Also check against the projected point if this is the final waypoint
+    const isLast = i === waypoints.length - 1;
+    const nearProjected = google.maps.geometry.spherical.computeDistanceBetween(best.projPoint, wp) < 5;
+
+    if ((wpIndex !== -1 && wpIndex <= best.segIndex) || (isLast && nearProjected)) {
+      waypointMarkers[i].crossed = true;
+      waypointMarkers[i].marker.setIcon(createMarkerIcon(i + 1, "#00c853")); // turn green
+    }
+  }
+});
+
     }
 
     function projectPointOnSegment(p, a, b) {
